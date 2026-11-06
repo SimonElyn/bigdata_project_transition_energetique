@@ -1,0 +1,5 @@
+energie,prix_eur_kwh,valeur_origine,unite_origine,date_valeur,source
+Électricité,0.2001,0.2001,€/kWh TTC,2026-08-01,"Tarif réglementé EDF option Base 6 kVA, délibération CRE n°2026-147 du 15/07/2026 (relayé par selectra.info)"
+Gaz naturel,0.1576,0.1576,€/kWh TTC,2026-11-01,"Prix repère de vente de gaz CRE, profil chauffage B1, novembre 2026 (relayé par selectra.info)"
+Fioul domestique,0.1732,1.7324,€/L TTC,2026-11-06,"Relevé hebdomadaire ministère de la Transition écologique, livraison 2000-4999 L ; conversion 10 kWh PCI/L"
+Bois – Bûches,0.0900,0.0900,€/kWh TTC,2026-11-01,"HYPOTHÈSE équipe : ordre de grandeur bûches livrées, à confirmer"
