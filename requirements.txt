@@ -4,3 +4,4 @@ requests>=2.31
 s3fs>=2024.2
 duckdb>=1.0
 pyspark>=3.5
+matplotlib>=3.8

@@ -23,3 +23,6 @@ Thumbs.db
 .vscode/
 .idea/
 logs/
+
+# Rapports de plantage de Java
+hs_err_pid*.log
