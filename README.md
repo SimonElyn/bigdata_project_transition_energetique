@@ -1,7 +1,7 @@
 # Rentabilité de la transition énergétique : comparatif par zone climatique
 
 ## Auteur
-- NOM Prénom
+- Simon Elyn
 
 ## Prérequis
 - Un compte Onyxia (SSP Cloud) et un service **VSCode-python** ou **Jupyter-pyspark** lancé.
