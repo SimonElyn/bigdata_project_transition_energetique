@@ -1,0 +1,170 @@
+"""
+GOLD - Calcul de la rentabilité de chaque solution, par département (Spark)
+
+Une seule formule pour tout :   années de retour = investissement net ÷ gain par an
+
+  1. Isolation (murs, toiture) : écart de consommation entre maisons mal et bien isolées
+  2. Pompe à chaleur           : remplace une chaudière gaz ou fioul
+  3. Panneaux solaires         : production PVGIS × (part autoconsommée × prix élec + surplus × tarif de rachat)
+  4. Voiture électrique        : budget carburant - budget électricité
+
+Sorties (couche gold) :
+  rentabilite        : le TABLEAU FINAL (Parquet + CSV), une ligne par solution et par département, avec le rang
+  detail_isolation   : le détail du calcul isolation par énergie de chauffage (pour le rapport)
+  graphique_rentabilite.png : le graphique des résultats, ouvert automatiquement à la fin
+
+Lancer depuis la racine du projet :
+    .venv\\Scripts\\python src\\gold\\rentabilite.py
+"""
+import json
+import sys
+from pathlib import Path
+
+from pyspark.sql import Window
+from pyspark.sql import functions as F
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from commun import (BRONZE, DEPARTEMENTS, ecrire, lire, lire_hypotheses, lire_tarifs,  # noqa: E402
+                    petite_table, spark_session)
+from gold.graphique import dessiner  # noqa: E402
+
+COLONNES_FINALES = ["departement", "solution", "investissement_net_eur", "gain_annuel_kwh",
+                    "gain_annuel_eur", "n_observations", "detail"]
+
+spark = spark_session("gold_rentabilite")
+dpe = lire(spark, "silver", "dpe_propre")
+carbu = lire(spark, "silver", "carburants_propre")
+H = lire_hypotheses(spark)       # ex : H["pac_cout"] = 13000
+prix = lire_tarifs(spark)        # ex : prix["Électricité"] = 0.2001 €/kWh
+prix_elec = prix["Électricité"]
+resultats = []                   # un DataFrame par solution, assemblés à la fin
+
+# =============================================================================
+# 1. ISOLATION
+# Pour chaque département et chaque énergie, on compare la consommation de chauffage
+# par m² (médiane) des maisons mal isolées et bien isolées. Écart × surface = kWh économisés.
+# =============================================================================
+prix_df = petite_table(spark, list(prix.items()), ["energie", "prix_eur_kwh"])
+details = None
+for solution, colonne, cle in [("Isolation des murs", "isolation_murs", "iso_murs"),
+                               ("Isolation de la toiture", "isolation_toiture", "iso_toiture")]:
+    mal = F.col(colonne) == "insuffisante"
+    bien = F.col(colonne).isin("bonne", "très bonne")
+    par_energie = (dpe.filter(F.col(colonne).isNotNull())
+                   .join(prix_df, "energie")          # garde les énergies dont on connaît le prix
+                   .groupBy("departement", "energie", "prix_eur_kwh").agg(
+                       F.median(F.when(mal, F.col("conso_m2"))).alias("conso_m2_mal_isole"),
+                       F.median(F.when(bien, F.col("conso_m2"))).alias("conso_m2_bien_isole"),
+                       F.median(F.when(mal, F.col("surface"))).alias("surface_mediane"),
+                       F.sum(mal.cast("int")).alias("n_mal_isole"),
+                       F.sum(bien.cast("int")).alias("n_bien_isole"))
+                   # au moins 30 maisons de chaque côté, sinon la médiane n'est pas fiable
+                   .filter((F.col("n_mal_isole") >= 30) & (F.col("n_bien_isole") >= 30))
+                   .withColumn("gain_kwh", (F.col("conso_m2_mal_isole") - F.col("conso_m2_bien_isole"))
+                               * F.col("surface_mediane"))
+                   .withColumn("gain_eur", F.col("gain_kwh") * F.col("prix_eur_kwh"))
+                   .withColumn("solution", F.lit(solution)))
+    details = par_energie if details is None else details.unionByName(par_energie)
+
+    # moyenne par département, pondérée par le nombre de maisons mal isolées de chaque énergie
+    poids = F.col("n_mal_isole")
+    resultats.append(
+        par_energie.groupBy("departement").agg(
+            (F.sum(F.col("gain_kwh") * poids) / F.sum(poids)).alias("gain_annuel_kwh"),
+            (F.sum(F.col("gain_eur") * poids) / F.sum(poids)).alias("gain_annuel_eur"),
+            (F.sum(F.col("surface_mediane") * poids) / F.sum(poids)).alias("surface"),
+            F.sum(poids).alias("n_observations"))
+        .withColumn("investissement_net_eur",
+                    F.col("surface") * H[f"{cle}_ratio_surface"] * H[f"{cle}_cout_m2"] - H[f"{cle}_aide"])
+        .withColumn("solution", F.lit(solution))
+        .withColumn("detail", F.format_string("maison de %.0f m², %d maisons mal isolées",
+                                              "surface", "n_observations"))
+        .select(*COLONNES_FINALES))
+
+ecrire(details, "gold", "detail_isolation", csv=True)    # détail consultable dans le CSV
+
+# =============================================================================
+# 2. POMPE À CHALEUR
+# Chaleur utile = conso actuelle × rendement de la chaudière ; la PAC consomme chaleur utile ÷ COP.
+# =============================================================================
+cop = F.create_map(*[F.lit(x) for z in ("H1", "H2", "H3") for x in (z, H[f"pac_scop_{z}"])])
+for energie, code in [("Gaz naturel", "gaz"), ("Fioul domestique", "fioul")]:
+    resultats.append(
+        dpe.filter(F.col("energie") == energie)
+        .groupBy("departement", "zone").agg(F.median("conso_chauffage").alias("conso_actuelle"),
+                                            F.count("*").alias("n_observations"))
+        .withColumn("cop", cop[F.col("zone")])
+        .withColumn("conso_pac", F.col("conso_actuelle") * H[f"rendement_chaudiere_{code}"] / F.col("cop"))
+        .withColumn("gain_annuel_kwh", F.col("conso_actuelle") - F.col("conso_pac"))
+        .withColumn("gain_annuel_eur", F.col("conso_actuelle") * prix[energie] - F.col("conso_pac") * prix_elec)
+        .withColumn("investissement_net_eur", F.lit(H["pac_cout"] - H["pac_aide"]))
+        .withColumn("solution", F.lit(f"Pompe à chaleur (remplace {code})"))
+        .withColumn("detail", F.format_string("chauffage actuel %.0f kWh/an, COP %.1f", "conso_actuelle", "cop"))
+        .select(*COLONNES_FINALES))
+
+# =============================================================================
+# 3. PANNEAUX SOLAIRES (production lue dans la réponse brute PVGIS)
+# =============================================================================
+texte = "".join(l.value for l in spark.read.text(f"{BRONZE}/pvgis/pvgis_villes.json").collect())
+pvgis = {d: rep["outputs"]["totals"]["fixed"]["E_y"] for d, rep in json.loads(texte).items()}
+kwc, autoconso = H["pv_puissance_kwc"], H["pv_taux_autoconso"]
+resultats.append(
+    petite_table(spark, [(d, float(e)) for d, e in pvgis.items()], ["departement", "kwh_par_kwc"])
+    .withColumn("gain_annuel_kwh", F.col("kwh_par_kwc") * kwc)
+    .withColumn("gain_annuel_eur", F.col("gain_annuel_kwh")
+                * (autoconso * prix_elec + (1 - autoconso) * H["pv_tarif_rachat"]))
+    .withColumn("investissement_net_eur", F.lit(H["pv_cout"] - H["pv_aide"]))
+    .withColumn("solution", F.lit(f"Panneaux solaires ({kwc:.0f} kWc)"))
+    .withColumn("n_observations", F.lit(None).cast("long"))
+    .withColumn("detail", F.format_string("%.0f kWh/kWc/an (PVGIS), %.0f %% autoconsommé",
+                                          "kwh_par_kwc", F.lit(autoconso * 100)))
+    .select(*COLONNES_FINALES))
+
+# =============================================================================
+# 4. VOITURE ÉLECTRIQUE (prix médian du carburant dans chaque département)
+# =============================================================================
+km = H["ve_km_an"]
+budget_electrique = km * H["ve_conso_kwh_100km"] / 100 * prix_elec
+litres_100km = F.when(F.col("carburant") == "e10", H["thermique_conso_essence_l_100km"]) \
+                .otherwise(H["thermique_conso_diesel_l_100km"])
+resultats.append(
+    carbu.groupBy("departement", "carburant").agg(F.median("prix").alias("prix_litre"),
+                                                  F.count("*").alias("n_observations"))
+    .withColumn("gain_annuel_eur", km * litres_100km / 100 * F.col("prix_litre") - budget_electrique)
+    .withColumn("gain_annuel_kwh", F.lit(None).cast("double"))
+    .withColumn("investissement_net_eur", F.lit(H["ve_surcout_achat"] - H["ve_aide"]))
+    .withColumn("solution", F.when(F.col("carburant") == "e10", "Voiture électrique (vs essence)")
+                .otherwise("Voiture électrique (vs diesel)"))
+    .withColumn("detail", F.format_string("carburant à %.3f €/L (%d stations), %.0f km/an",
+                                          "prix_litre", "n_observations", F.lit(km)))
+    .select(*COLONNES_FINALES))
+
+# =============================================================================
+# 5. TABLEAU FINAL + CLASSEMENT DANS CHAQUE DÉPARTEMENT
+# =============================================================================
+tout = resultats[0]
+for r in resultats[1:]:
+    tout = tout.unionByName(r)
+
+infos = petite_table(spark, [(d, i["nom"], i["zone"]) for d, i in DEPARTEMENTS.items()],
+                     ["departement", "nom_departement", "zone"])
+rentable = F.col("gain_annuel_eur") > 0
+classement = Window.partitionBy("departement").orderBy(
+    F.when(rentable, F.col("investissement_net_eur") / F.col("gain_annuel_eur")).otherwise(F.lit(1e9)))
+
+final = (tout.join(infos, "departement")
+         .withColumn("retour_annees", F.when(rentable, F.col("investissement_net_eur") / F.col("gain_annuel_eur")))
+         .withColumn("rang", F.row_number().over(classement))
+         .select("zone", "departement", "nom_departement", "rang", "solution",
+                 F.round("investissement_net_eur", 0).alias("investissement_net_eur"),
+                 F.round("gain_annuel_kwh", 0).alias("gain_annuel_kwh"),
+                 F.round("gain_annuel_eur", 0).alias("gain_annuel_eur"),
+                 F.round("retour_annees", 1).alias("retour_annees"),
+                 "n_observations", "detail")
+         .orderBy("zone", "departement", "rang"))
+
+ecrire(final, "gold", "rentabilite", csv=True)
+
+# Graphique au lieu d'un tableau dans le terminal (voir graphique.py)
+dessiner(final.toPandas())
+spark.stop()
