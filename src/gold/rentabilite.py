@@ -4,7 +4,7 @@ GOLD - Calcul de la rentabilité de chaque solution, par département (Spark)
 Une seule formule pour tout :   années de retour = investissement net ÷ gain par an
 
   1. Isolation (murs, toiture) : écart de consommation entre maisons mal et bien isolées
-  2. Pompe à chaleur           : remplace une chaudière gaz ou fioul
+  2. Pompe à chaleur           : remplace une chaudière gaz, fioul ou des radiateurs électriques
   3. Panneaux solaires         : production PVGIS × (part autoconsommée × prix élec + surplus × tarif de rachat)
   4. Voiture électrique        : budget carburant - budget électricité
 
@@ -88,17 +88,24 @@ ecrire(details, "gold", "detail_isolation", csv=True)    # détail consultable d
 # Chaleur utile = conso actuelle × rendement de la chaudière ; la PAC consomme chaleur utile ÷ COP.
 # =============================================================================
 cop = F.create_map(*[F.lit(x) for z in ("H1", "H2", "H3") for x in (z, H[f"pac_scop_{z}"])])
-for energie, code in [("Gaz naturel", "gaz"), ("Fioul domestique", "fioul")]:
+# (énergie de chauffage actuelle, rendement de l'ancien chauffage, nom affiché)
+for energie, rendement, nom in [
+        ("Gaz naturel",      H["rendement_chaudiere_gaz"],        "gaz"),
+        ("Fioul domestique", H["rendement_chaudiere_fioul"],      "fioul"),
+        # radiateurs électriques : 1 kWh acheté = 1 kWh de chaleur ; la PAC en donne 2,8 à 3,6.
+        # Limite : la catégorie "Électricité" du DPE contient aussi des maisons déjà
+        # équipées d'une PAC (elles consomment moins), le gain est donc plutôt sous-estimé.
+        ("Électricité",      H["rendement_chauffage_electrique"], "radiateurs électriques")]:
     resultats.append(
         dpe.filter(F.col("energie") == energie)
         .groupBy("departement", "zone").agg(F.median("conso_chauffage").alias("conso_actuelle"),
                                             F.count("*").alias("n_observations"))
         .withColumn("cop", cop[F.col("zone")])
-        .withColumn("conso_pac", F.col("conso_actuelle") * H[f"rendement_chaudiere_{code}"] / F.col("cop"))
+        .withColumn("conso_pac", F.col("conso_actuelle") * rendement / F.col("cop"))
         .withColumn("gain_annuel_kwh", F.col("conso_actuelle") - F.col("conso_pac"))
         .withColumn("gain_annuel_eur", F.col("conso_actuelle") * prix[energie] - F.col("conso_pac") * prix_elec)
         .withColumn("investissement_net_eur", F.lit(H["pac_cout"] - H["pac_aide"]))
-        .withColumn("solution", F.lit(f"Pompe à chaleur (remplace {code})"))
+        .withColumn("solution", F.lit(f"Pompe à chaleur (remplace {nom})"))
         .withColumn("detail", F.format_string("chauffage actuel %.0f kWh/an, COP %.1f", "conso_actuelle", "cop"))
         .select(*COLONNES_FINALES))
 

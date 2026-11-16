@@ -42,6 +42,7 @@ COULEURS = {
     "Isolation des murs":               "#8ac926",
     "Pompe à chaleur (remplace fioul)": "#e63946",   # rouges = pompe à chaleur
     "Pompe à chaleur (remplace gaz)":   "#f4a261",
+    "Pompe à chaleur (remplace radiateurs électriques)": "#9d4edd",
     "Voiture électrique (vs essence)":  "#1d3557",   # bleus = voiture
     "Voiture électrique (vs diesel)":   "#6c9bd2",
     "Panneaux solaires (3 kWc)":        "#e9c46a",   # jaune = solaire

@@ -12,6 +12,7 @@ pac_scop_H2,3.2,sans unité,"HYPOTHÈSE équipe : COP saisonnier climat océaniq
 pac_scop_H3,3.6,sans unité,"HYPOTHÈSE équipe : COP saisonnier climat méditerranéen"
 rendement_chaudiere_gaz,0.90,sans unité,"HYPOTHÈSE équipe : chaudière gaz récente"
 rendement_chaudiere_fioul,0.85,sans unité,"HYPOTHÈSE équipe : chaudière fioul"
+rendement_chauffage_electrique,1.0,sans unité,"Radiateurs électriques (effet Joule) : 1 kWh consommé = 1 kWh de chaleur"
 pv_puissance_kwc,3,kWc,"Installation résidentielle type"
 pv_cout,7000,€ TTC,"Kit 3 kWc posé ~6 750 € TTC (devis publié 2026) arrondi"
 pv_aide,0,€,"Prime à l'autoconsommation supprimée par l'arrêté du 01/06/2026"
