@@ -11,11 +11,13 @@ Une seule formule pour tout :   années de retour = investissement net ÷ gain p
 Sorties (couche gold) :
   rentabilite        : le TABLEAU FINAL (Parquet + CSV), une ligne par solution et par département, avec le rang
   detail_isolation   : le détail du calcul isolation par énergie de chauffage (pour le rapport)
-  graphique_rentabilite.png : le graphique des résultats, ouvert automatiquement à la fin
+  rentabilite_par_zone : moyenne par zone climatique et par domaine, avec l'indice de froid (CSV)
+  graphique_*.png    : les 4 graphiques (voir graphique.py), ouverts automatiquement à la fin
 
 Lancer depuis la racine du projet :
     .venv\\Scripts\\python src\\gold\\rentabilite.py
 """
+import calendar
 import json
 import sys
 from pathlib import Path
@@ -172,6 +174,47 @@ final = (tout.join(infos, "departement")
 
 ecrire(final, "gold", "rentabilite", csv=True)
 
-# Graphique au lieu d'un tableau dans le terminal (voir graphique.py)
-dessiner(final.toPandas())
+# =============================================================================
+# 6. MOYENNE PAR SOUS-ZONE CLIMATIQUE ET PAR DOMAINE, AVEC UN INDICE DE FROID
+# Sous-zones officielles : Paris H1a, Bas-Rhin H1b, Ille-et-Vilaine H2a, Bouches-du-Rhône H3
+# (une par département étudié).
+# Indice de froid, calculé avec les températures mensuelles PVGIS 2005-2023 :
+#   - température moyenne de l'année
+#   - degrés-jours de chauffage (DJU) : chaque jour où il fait moins de 18 °C,
+#     on compte l'écart (18 - température). Plus il y en a, plus on chauffe.
+#     Ici calculé avec la moyenne de chaque mois (approximation).
+# =============================================================================
+texte = "".join(l.value for l in spark.read.text(f"{BRONZE}/pvgis/temperatures_villes.json").collect())
+lignes_temp = []
+for d, rep in json.loads(texte).items():
+    mois = rep["outputs"]["monthly"]                  # 19 ans × 12 mois
+    nb_annees = len({m["year"] for m in mois})
+    dju = sum(max(0.0, 18 - m["T2m"]) * calendar.monthrange(m["year"], m["month"])[1] for m in mois) / nb_annees
+    # indice de soleil = kWh produits en un an par 1 kWc de panneaux (PVGIS, partie 3)
+    lignes_temp.append((d, sum(m["T2m"] for m in mois) / len(mois), dju, float(pvgis[d])))
+temperatures = petite_table(spark, lignes_temp, ["departement", "temperature_moyenne", "dju", "soleil_kwh_kwc"])
+
+# domaine = famille de solutions (on regroupe les 3 PAC, les 2 isolations, les 2 voitures)
+s = F.col("solution")
+domaine = (F.when(s.startswith("Isolation"), "Isolation")
+            .when(s.startswith("Pompe"), "Chauffage (pompe à chaleur)")
+            .when(s.startswith("Panneaux"), "Panneaux solaires")
+            .otherwise("Voiture électrique"))
+sous_zones = petite_table(spark, [(d, i["sous_zone"]) for d, i in DEPARTEMENTS.items()],
+                          ["departement", "sous_zone"])
+indice = (temperatures.join(sous_zones, "departement")
+          .select("departement", "sous_zone",
+                  F.round("temperature_moyenne", 1).alias("temperature_moyenne"),
+                  F.round("dju", 0).alias("dju"),
+                  F.round("soleil_kwh_kwc", 0).alias("soleil_kwh_kwc")))
+par_zone = (final.withColumn("domaine", domaine)
+            .groupBy("zone", "departement", "nom_departement", "domaine")
+            .agg(F.round(F.avg("retour_annees"), 1).alias("retour_moyen_annees"),
+                 F.count("*").alias("nb_resultats_moyennes"))
+            .join(indice, "departement")
+            .orderBy(F.desc("dju"), "domaine"))                    # du plus froid au plus doux
+ecrire(par_zone, "gold", "rentabilite_par_zone", csv=True)
+
+# Graphiques au lieu d'un tableau dans le terminal (voir graphique.py)
+dessiner(final.toPandas(), par_zone.toPandas())
 spark.stop()

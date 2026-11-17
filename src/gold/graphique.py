@@ -1,7 +1,7 @@
 """
 GOLD - Graphiques des résultats
 
-Trois images, enregistrées dans data/gold/ et ouvertes automatiquement sur ton PC :
+Quatre images, enregistrées dans data/gold/ et ouvertes automatiquement sur ton PC :
 
   graphique_rentabilite.png : BARRES. Un graphique par département, une barre par solution
                               = nombre d'années pour rembourser l'investissement.
@@ -14,6 +14,10 @@ Trois images, enregistrées dans data/gold/ et ouvertes automatiquement sur ton 
 
   graphique_bilan_5ans.png  : TABLEAU COLORÉ. Le bilan net de chaque solution tous les 5 ans
                               (rouge = encore en perte, vert = bénéfice).
+
+  graphique_zones.png       : PAR ZONE. Années de retour moyennes par zone climatique (H1, H2, H3)
+                              et par domaine (isolation, chauffage, solaire, voiture),
+                              avec l'indice de froid de chaque zone (température, degrés-jours).
 
 Appelé automatiquement à la fin de rentabilite.py.
 On peut aussi le relancer seul (sans Spark, il relit data/gold/rentabilite.csv) :
@@ -217,11 +221,87 @@ def tableau_bilan(resultats: pd.DataFrame) -> Path:
 
 
 # =============================================================================
-def dessiner(resultats: pd.DataFrame, ouvrir: bool = True) -> None:
-    """resultats = le tableau final (une ligne par solution et par département)."""
+# 4. PAR SOUS-ZONE CLIMATIQUE (H1b, H1a, H2a, H3) : années de retour moyennes de chaque
+#    domaine (isolation, chauffage, solaire, voiture). Au-dessus, un « thermomètre » :
+#    degrés-jours de chauffage et température moyenne de l'année (d'après PVGIS).
+# =============================================================================
+COULEURS_DOMAINE = {"Isolation": "#2a9d8f", "Chauffage (pompe à chaleur)": "#e76f51",
+                    "Voiture électrique": "#457b9d", "Panneaux solaires": "#e9c46a"}
+
+
+def zones(par_zone: pd.DataFrame) -> Path:
+    # une sous-zone par département, de la plus froide (le plus de degrés-jours) à la plus douce
+    climat = (par_zone.drop_duplicates("departement")
+              .sort_values("dju", ascending=False).reset_index(drop=True))
+    ordre = list(climat["departement"])
+    x0 = np.arange(len(ordre))
+    domaines = list(COULEURS_DOMAINE)
+    largeur = 0.2                                         # largeur d'une barre
+
+    # 2 étages : en haut le thermomètre (indice de froid), en bas la rentabilité
+    fig, (haut, bas) = plt.subplots(2, 1, figsize=(15, 11), sharex=True,
+                                    gridspec_kw={"height_ratios": [1.9, 4]})
+
+    # ---- ÉTAGE DU HAUT : deux indices côte à côte pour chaque sous-zone ----
+    #   à gauche  FROID  : hauteur = degrés-jours de chauffage, couleur = température (bleu froid -> rouge doux)
+    #   à droite  SOLEIL : hauteur = kWh produits par an par 1 kWc de panneaux (PVGIS), en jaune/orange
+    # Les deux n'ont pas la même unité : chaque barre est dessinée en % de la plus grande de son indice,
+    # et la vraie valeur est écrite dedans.
+    demi = 0.38                                           # largeur d'une barre d'indice
+    couleur_temp, couleur_soleil = plt.get_cmap("coolwarm"), plt.get_cmap("YlOrBr")
+
+    def position(v, serie):                               # 0 = plus petite valeur, 1 = plus grande
+        return (v - serie.min()) / (serie.max() - serie.min())
+
+    for x, (_, r) in zip(x0, climat.iterrows()):
+        froid = r["dju"] / climat["dju"].max()
+        soleil = r["soleil_kwh_kwc"] / climat["soleil_kwh_kwc"].max()
+        haut.bar(x - demi / 2, froid, demi * 0.95,
+                 color=couleur_temp(0.1 + 0.8 * position(r["temperature_moyenne"], climat["temperature_moyenne"])))
+        haut.bar(x + demi / 2, soleil, demi * 0.95,
+                 color=couleur_soleil(0.25 + 0.4 * position(r["soleil_kwh_kwc"], climat["soleil_kwh_kwc"])))
+        haut.text(x - demi / 2, froid / 2, f"FROID\n{r['temperature_moyenne']:.1f} °C\n{r['dju']:.0f}\ndegrés-jours"
+                  .replace(".", ","), ha="center", va="center", fontsize=9, fontweight="bold", color="white")
+        haut.text(x + demi / 2, soleil / 2, f"SOLEIL\n{r['soleil_kwh_kwc']:.0f}\nkWh/an\npar kWc",
+                  ha="center", va="center", fontsize=9, fontweight="bold", color="#3d2400")
+    haut.set_title("Climat de l'année : froid (degrés-jours, bleu = froid) et soleil (production solaire PVGIS)",
+                   fontsize=12, fontweight="bold", loc="left")
+    haut.set_ylim(0, 1.05)
+    haut.set_yticks([])
+    haut.spines[["top", "right", "left"]].set_visible(False)
+
+    # ---- ÉTAGE DU BAS : années de retour moyennes par domaine ----
+    for i, dom in enumerate(domaines):
+        d = par_zone[par_zone["domaine"] == dom].set_index("departement").reindex(ordre)
+        x = x0 + (i - 1.5) * largeur                      # 4 barres côte à côte par sous-zone
+        b = bas.bar(x, d["retour_moyen_annees"], largeur, color=COULEURS_DOMAINE[dom], label=dom)
+        bas.bar_label(b, labels=[f"{v:.1f}".replace(".", ",") for v in d["retour_moyen_annees"]],
+                      padding=3, fontsize=10, fontweight="bold")
+    bas.set_xticks(x0, [f"{r['nom_departement']}\nzone {r['sous_zone']}" for _, r in climat.iterrows()],
+                   fontsize=12)
+    bas.set_ylabel("Années pour rembourser (moins = mieux)", fontsize=11)
+    bas.set_ylim(0, par_zone["retour_moyen_annees"].max() * 1.15)
+    bas.grid(axis="y", alpha=0.3)
+    bas.spines[["top", "right"]].set_visible(False)
+    bas.legend(loc="upper left", fontsize=11, frameon=False, ncol=4)
+    bas.set_xlabel("◀  plus froid                                                    plus doux  ▶",
+                   fontsize=11, labelpad=10)
+
+    fig.suptitle("Rentabilité moyenne par zone climatique et par domaine",
+                 fontsize=16, fontweight="bold")
+    fig.tight_layout()
+    return _enregistrer(fig, "graphique_zones.png")
+
+
+# =============================================================================
+def dessiner(resultats: pd.DataFrame, par_zone: pd.DataFrame, ouvrir: bool = True) -> None:
+    """resultats = le tableau final (une ligne par solution et par département)
+    par_zone  = la moyenne par zone climatique et par domaine, avec l'indice de froid."""
     resultats = resultats.copy()
     resultats["departement"] = resultats["departement"].astype(str)
-    images = [barres(resultats), bilan(resultats), tableau_bilan(resultats)]
+    par_zone = par_zone.copy()
+    par_zone["departement"] = par_zone["departement"].astype(str)
+    images = [barres(resultats), bilan(resultats), tableau_bilan(resultats), zones(par_zone)]
     # Ouvre les images avec la visionneuse de Windows (seulement sur ton PC)
     if ouvrir and platform.system() == "Windows":
         for image in images:
@@ -229,5 +309,6 @@ def dessiner(resultats: pd.DataFrame, ouvrir: bool = True) -> None:
 
 
 if __name__ == "__main__":
-    # Lancé seul : relit le CSV écrit par rentabilite.py
-    dessiner(pd.read_csv(DOSSIER / "rentabilite.csv", dtype={"departement": str}))
+    # Lancé seul : relit les CSV écrits par rentabilite.py
+    dessiner(pd.read_csv(DOSSIER / "rentabilite.csv", dtype={"departement": str}),
+             pd.read_csv(DOSSIER / "rentabilite_par_zone.csv"))
