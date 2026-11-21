@@ -1,0 +1,21 @@
+Vérification indépendante DuckDB 2.0.0 - 2026-11-21 12:52:07
+Source : data\bronze\dpe\dpe_maisons.csv (données brutes, bronze)
+
+Maisons après nettoyage : DuckDB = 22195 (Spark a trouvé 22195 lors du nettoyage silver)
+
+Pompe à chaleur : gain par an et années de retour, Spark contre DuckDB
+departement                                          solution  gain_spark  gain_duckdb  retour_spark  retour_duckdb  identique
+         13                  Pompe à chaleur (remplace fioul)      2720.0       2720.0           3.7            3.7       True
+         35                  Pompe à chaleur (remplace fioul)      2811.0       2811.0           3.6            3.6       True
+         67                  Pompe à chaleur (remplace fioul)      3244.0       3244.0           3.1            3.1       True
+         75                  Pompe à chaleur (remplace fioul)      3257.0       3257.0           3.1            3.1       True
+         13                    Pompe à chaleur (remplace gaz)      1321.0       1321.0           7.6            7.6       True
+         35                    Pompe à chaleur (remplace gaz)      1254.0       1254.0           8.0            8.0       True
+         67                    Pompe à chaleur (remplace gaz)      1711.0       1711.0           5.8            5.8       True
+         75                    Pompe à chaleur (remplace gaz)      2261.0       2261.0           4.4            4.4       True
+         13 Pompe à chaleur (remplace radiateurs électriques)       661.0        661.0          15.1           15.1       True
+         35 Pompe à chaleur (remplace radiateurs électriques)       951.0        951.0          10.5           10.5       True
+         67 Pompe à chaleur (remplace radiateurs électriques)      1251.0       1251.0           8.0            8.0       True
+         75 Pompe à chaleur (remplace radiateurs électriques)       669.0        669.0          15.0           15.0       True
+
+RÉSULTAT : 12/12 résultats identiques entre Spark et DuckDB  -> pipeline Spark VALIDÉ
