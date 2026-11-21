@@ -1,0 +1,10 @@
+facteur,lignes,outil,secondes,machine
+1,22457,pandas,0.025,"Windows AMD64, 6 coeurs"
+1,22457,DuckDB,0.203,"Windows AMD64, 6 coeurs"
+1,22457,Spark,0.671,"Windows AMD64, 6 coeurs"
+10,224570,pandas,0.05,"Windows AMD64, 6 coeurs"
+10,224570,DuckDB,0.212,"Windows AMD64, 6 coeurs"
+10,224570,Spark,0.633,"Windows AMD64, 6 coeurs"
+50,1122850,pandas,0.14,"Windows AMD64, 6 coeurs"
+50,1122850,DuckDB,0.258,"Windows AMD64, 6 coeurs"
+50,1122850,Spark,0.663,"Windows AMD64, 6 coeurs"
