@@ -4,18 +4,20 @@ GOLD - Calcul de la rentabilité de chaque solution, par département (Spark)
 Une seule formule pour tout :   années de retour = investissement net ÷ gain par an
 
   1. Isolation (murs, toiture) : écart de consommation entre maisons mal et bien isolées
-  2. Pompe à chaleur           : remplace une chaudière gaz ou fioul
+  2. Pompe à chaleur           : remplace une chaudière gaz, fioul ou des radiateurs électriques
   3. Panneaux solaires         : production PVGIS × (part autoconsommée × prix élec + surplus × tarif de rachat)
   4. Voiture électrique        : budget carburant - budget électricité
 
 Sorties (couche gold) :
   rentabilite        : le TABLEAU FINAL (Parquet + CSV), une ligne par solution et par département, avec le rang
   detail_isolation   : le détail du calcul isolation par énergie de chauffage (pour le rapport)
-  graphique_rentabilite.png : le graphique des résultats, ouvert automatiquement à la fin
+  rentabilite_par_zone : moyenne par zone climatique et par domaine, avec l'indice de froid (CSV)
+  graphique_*.png    : les 4 graphiques (voir graphique.py), ouverts automatiquement à la fin
 
 Lancer depuis la racine du projet :
     .venv\\Scripts\\python src\\gold\\rentabilite.py
 """
+import calendar
 import json
 import sys
 from pathlib import Path
@@ -88,17 +90,24 @@ ecrire(details, "gold", "detail_isolation", csv=True)    # détail consultable d
 # Chaleur utile = conso actuelle × rendement de la chaudière ; la PAC consomme chaleur utile ÷ COP.
 # =============================================================================
 cop = F.create_map(*[F.lit(x) for z in ("H1", "H2", "H3") for x in (z, H[f"pac_scop_{z}"])])
-for energie, code in [("Gaz naturel", "gaz"), ("Fioul domestique", "fioul")]:
+# (énergie de chauffage actuelle, rendement de l'ancien chauffage, nom affiché)
+for energie, rendement, nom in [
+        ("Gaz naturel",      H["rendement_chaudiere_gaz"],        "gaz"),
+        ("Fioul domestique", H["rendement_chaudiere_fioul"],      "fioul"),
+        # radiateurs électriques : 1 kWh acheté = 1 kWh de chaleur ; la PAC en donne 2,8 à 3,6.
+        # Limite : la catégorie "Électricité" du DPE contient aussi des maisons déjà
+        # équipées d'une PAC (elles consomment moins), le gain est donc plutôt sous-estimé.
+        ("Électricité",      H["rendement_chauffage_electrique"], "radiateurs électriques")]:
     resultats.append(
         dpe.filter(F.col("energie") == energie)
         .groupBy("departement", "zone").agg(F.median("conso_chauffage").alias("conso_actuelle"),
                                             F.count("*").alias("n_observations"))
         .withColumn("cop", cop[F.col("zone")])
-        .withColumn("conso_pac", F.col("conso_actuelle") * H[f"rendement_chaudiere_{code}"] / F.col("cop"))
+        .withColumn("conso_pac", F.col("conso_actuelle") * rendement / F.col("cop"))
         .withColumn("gain_annuel_kwh", F.col("conso_actuelle") - F.col("conso_pac"))
         .withColumn("gain_annuel_eur", F.col("conso_actuelle") * prix[energie] - F.col("conso_pac") * prix_elec)
         .withColumn("investissement_net_eur", F.lit(H["pac_cout"] - H["pac_aide"]))
-        .withColumn("solution", F.lit(f"Pompe à chaleur (remplace {code})"))
+        .withColumn("solution", F.lit(f"Pompe à chaleur (remplace {nom})"))
         .withColumn("detail", F.format_string("chauffage actuel %.0f kWh/an, COP %.1f", "conso_actuelle", "cop"))
         .select(*COLONNES_FINALES))
 
@@ -165,6 +174,47 @@ final = (tout.join(infos, "departement")
 
 ecrire(final, "gold", "rentabilite", csv=True)
 
-# Graphique au lieu d'un tableau dans le terminal (voir graphique.py)
-dessiner(final.toPandas())
+# =============================================================================
+# 6. MOYENNE PAR SOUS-ZONE CLIMATIQUE ET PAR DOMAINE, AVEC UN INDICE DE FROID
+# Sous-zones officielles : Paris H1a, Bas-Rhin H1b, Ille-et-Vilaine H2a, Bouches-du-Rhône H3
+# (une par département étudié).
+# Indice de froid, calculé avec les températures mensuelles PVGIS 2005-2023 :
+#   - température moyenne de l'année
+#   - degrés-jours de chauffage (DJU) : chaque jour où il fait moins de 18 °C,
+#     on compte l'écart (18 - température). Plus il y en a, plus on chauffe.
+#     Ici calculé avec la moyenne de chaque mois (approximation).
+# =============================================================================
+texte = "".join(l.value for l in spark.read.text(f"{BRONZE}/pvgis/temperatures_villes.json").collect())
+lignes_temp = []
+for d, rep in json.loads(texte).items():
+    mois = rep["outputs"]["monthly"]                  # 19 ans × 12 mois
+    nb_annees = len({m["year"] for m in mois})
+    dju = sum(max(0.0, 18 - m["T2m"]) * calendar.monthrange(m["year"], m["month"])[1] for m in mois) / nb_annees
+    # indice de soleil = kWh produits en un an par 1 kWc de panneaux (PVGIS, partie 3)
+    lignes_temp.append((d, sum(m["T2m"] for m in mois) / len(mois), dju, float(pvgis[d])))
+temperatures = petite_table(spark, lignes_temp, ["departement", "temperature_moyenne", "dju", "soleil_kwh_kwc"])
+
+# domaine = famille de solutions (on regroupe les 3 PAC, les 2 isolations, les 2 voitures)
+s = F.col("solution")
+domaine = (F.when(s.startswith("Isolation"), "Isolation")
+            .when(s.startswith("Pompe"), "Chauffage (pompe à chaleur)")
+            .when(s.startswith("Panneaux"), "Panneaux solaires")
+            .otherwise("Voiture électrique"))
+sous_zones = petite_table(spark, [(d, i["sous_zone"]) for d, i in DEPARTEMENTS.items()],
+                          ["departement", "sous_zone"])
+indice = (temperatures.join(sous_zones, "departement")
+          .select("departement", "sous_zone",
+                  F.round("temperature_moyenne", 1).alias("temperature_moyenne"),
+                  F.round("dju", 0).alias("dju"),
+                  F.round("soleil_kwh_kwc", 0).alias("soleil_kwh_kwc")))
+par_zone = (final.withColumn("domaine", domaine)
+            .groupBy("zone", "departement", "nom_departement", "domaine")
+            .agg(F.round(F.avg("retour_annees"), 1).alias("retour_moyen_annees"),
+                 F.count("*").alias("nb_resultats_moyennes"))
+            .join(indice, "departement")
+            .orderBy(F.desc("dju"), "domaine"))                    # du plus froid au plus doux
+ecrire(par_zone, "gold", "rentabilite_par_zone", csv=True)
+
+# Graphiques au lieu d'un tableau dans le terminal (voir graphique.py)
+dessiner(final.toPandas(), par_zone.toPandas())
 spark.stop()

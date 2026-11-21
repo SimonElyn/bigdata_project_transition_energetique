@@ -20,12 +20,17 @@ import pandas as pd
 RACINE = Path(__file__).resolve().parents[1]           # dossier racine du projet
 STORAGE = os.environ.get("STORAGE", "local")
 
-# Les 4 départements étudiés : zone climatique et chef-lieu (coordonnées pour PVGIS)
+# Les 4 départements étudiés : zone climatique, sous-zone (zonage officiel de la
+# réglementation thermique : H1a, H1b, H2a...) et chef-lieu (coordonnées pour PVGIS)
 DEPARTEMENTS = {
-    "67": {"zone": "H1", "nom": "Bas-Rhin",         "ville": "Strasbourg", "lat": 48.5734, "lon": 7.7521},
-    "75": {"zone": "H1", "nom": "Paris",            "ville": "Paris",      "lat": 48.8566, "lon": 2.3522},
-    "35": {"zone": "H2", "nom": "Ille-et-Vilaine",  "ville": "Rennes",     "lat": 48.1173, "lon": -1.6778},
-    "13": {"zone": "H3", "nom": "Bouches-du-Rhône", "ville": "Marseille",  "lat": 43.2965, "lon": 5.3698},
+    "67": {"zone": "H1", "sous_zone": "H1b", "nom": "Bas-Rhin",         "ville": "Strasbourg",
+           "lat": 48.5734, "lon": 7.7521},
+    "75": {"zone": "H1", "sous_zone": "H1a", "nom": "Paris",            "ville": "Paris",
+           "lat": 48.8566, "lon": 2.3522},
+    "35": {"zone": "H2", "sous_zone": "H2a", "nom": "Ille-et-Vilaine",  "ville": "Rennes",
+           "lat": 48.1173, "lon": -1.6778},
+    "13": {"zone": "H3", "sous_zone": "H3",  "nom": "Bouches-du-Rhône", "ville": "Marseille",
+           "lat": 43.2965, "lon": 5.3698},
 }
 
 # ----- Chemins des 3 couches -----
