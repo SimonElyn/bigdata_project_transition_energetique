@@ -44,7 +44,8 @@ dpe = (brut
        .withColumn("conso_m2", F.col("conso_chauffage") / F.col("surface"))
        # zone attendue d'après le département, et zone saisie par le diagnostiqueur (H1b -> H1)
        .withColumn("zone_attendue", zone_du_dept[F.col("code_departement_ban")])
-       .withColumn("zone_saisie", F.substring("zone_climatique", 1, 2)))
+       .withColumn("zone_saisie", F.substring("zone_climatique", 1, 2))
+       .cache())
 
 # ---- Comptage des problèmes (AVANT nettoyage) ----
 def compter(condition):
@@ -103,6 +104,7 @@ dpe_propre = (dpe
                       F.col("cout_chauffage").cast("double").alias("cout_chauffage_dpe")))
 print(f"DPE propres : {dpe_propre.count()} lignes")
 ecrire(dpe_propre, "silver", "dpe_propre")
+dpe.unpersist()
 
 # =============================================================================
 # 2. CARBURANTS : passage en format "long" (une ligne = une station + un carburant)
