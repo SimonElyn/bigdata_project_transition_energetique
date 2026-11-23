@@ -48,34 +48,41 @@ dpe = (brut
        .cache())
 
 # ---- Comptage des problèmes (AVANT nettoyage) ----
-def compter(condition):
-    return dpe.filter(condition).count()
-
 surface, conso, conso_m2 = F.col("surface"), F.col("conso_chauffage"), F.col("conso_m2")
 zone_saisie = F.col("zone_saisie")
-problemes += [
-    ("DPE", "doublon de numero_dpe", n - dpe.select("numero_dpe").distinct().count(), n, "ligne supprimée"),
-    ("DPE", "surface manquante", compter(surface.isNull()), n, "ligne supprimée"),
-    ("DPE", f"surface hors de [{SURFACE_MIN}, {SURFACE_MAX}] m²",
-     compter((surface < SURFACE_MIN) | (surface > SURFACE_MAX)), n, "ligne supprimée"),
-    ("DPE", "consommation de chauffage manquante ou nulle", compter(conso.isNull() | (conso <= 0)), n, "ligne supprimée"),
-    ("DPE", f"consommation par m² hors de [{CONSO_M2_MIN}, {CONSO_M2_MAX}] kWh",
-     compter((conso_m2 < CONSO_M2_MIN) | (conso_m2 > CONSO_M2_MAX)), n, "ligne supprimée"),
-    ("DPE", "zone climatique vide ou 'Non affecté'",
-     compter(zone_saisie.isNull() | ~zone_saisie.isin("H1", "H2", "H3")), n, "zone reprise du département"),
-    ("DPE", "zone climatique incohérente avec le département",
-     compter(zone_saisie.isin("H1", "H2", "H3") & (zone_saisie != F.col("zone_attendue"))), n,
+controles_dpe = [
+    ("surface manquante", surface.isNull(), "ligne supprimée"),
+    (f"surface hors de [{SURFACE_MIN}, {SURFACE_MAX}] m²",
+     (surface < SURFACE_MIN) | (surface > SURFACE_MAX), "ligne supprimée"),
+    ("consommation de chauffage manquante ou nulle",
+     conso.isNull() | (conso <= 0), "ligne supprimée"),
+    (f"consommation par m² hors de [{CONSO_M2_MIN}, {CONSO_M2_MAX}] kWh",
+     (conso_m2 < CONSO_M2_MIN) | (conso_m2 > CONSO_M2_MAX), "ligne supprimée"),
+    ("zone climatique vide ou 'Non affecté'",
+     zone_saisie.isNull() | ~zone_saisie.isin("H1", "H2", "H3"), "zone reprise du département"),
+    ("zone climatique incohérente avec le département",
+     zone_saisie.isin("H1", "H2", "H3") & (zone_saisie != F.col("zone_attendue")),
      "zone reprise du département"),
-    ("DPE", "énergie de chauffage manquante", compter(F.col("type_energie_principale_chauffage").isNull()), n,
+    ("énergie de chauffage manquante", F.col("type_energie_principale_chauffage").isNull(),
      "ligne gardée, exclue des calculs en euros"),
-    ("DPE", "année de construction manquante", compter(F.col("annee").isNull()), n,
+    ("année de construction manquante", F.col("annee").isNull(),
      "ligne gardée (colonne non utilisée dans les calculs)"),
-    ("DPE", "qualité d'isolation des murs manquante", compter(F.col("qualite_isolation_murs").isNull()), n,
+    ("qualité d'isolation des murs manquante", F.col("qualite_isolation_murs").isNull(),
      "ligne exclue du calcul isolation des murs"),
-    ("DPE", "qualité d'isolation de la toiture manquante",
-     compter(F.col("qualite_isolation_plancher_haut_comble_perdu").isNull()), n,
+    ("qualité d'isolation de la toiture manquante",
+     F.col("qualite_isolation_plancher_haut_comble_perdu").isNull(),
      "ligne exclue du calcul isolation toiture (souvent combles aménagés)"),
 ]
+comptages_dpe = dpe.agg(*[
+    F.coalesce(F.sum(F.when(condition, 1).otherwise(0)), F.lit(0)).alias(f"probleme_{i}")
+    for i, (_, condition, _) in enumerate(controles_dpe)
+]).first()
+problemes.append(("DPE", "doublon de numero_dpe",
+                  n - dpe.select("numero_dpe").distinct().count(), n, "ligne supprimée"))
+problemes.extend(
+    ("DPE", nom, int(comptages_dpe[f"probleme_{i}"]), n, traitement)
+    for i, (nom, _, traitement) in enumerate(controles_dpe)
+)
 
 # ---- Nettoyage ----
 energie = F.col("type_energie_principale_chauffage")
