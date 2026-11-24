@@ -91,7 +91,12 @@ def ecrire(df, couche: str, nom: str, csv: bool = False) -> None:
     else:
         df.write.mode("overwrite").parquet(chemin)
         if csv:
-            df.coalesce(1).write.mode("overwrite").option("header", True).csv(f"{chemin}_csv")
+            if STORAGE == "s3":
+                df.coalesce(1).write.mode("overwrite").option("header", True).csv(f"{chemin}_csv")
+            else:
+                fichier_csv = RACINE / "data" / couche / f"{nom}.csv"
+                fichier_csv.parent.mkdir(parents=True, exist_ok=True)
+                df.toPandas().to_csv(fichier_csv, index=False, encoding="utf-8")
     print(f"   -> écrit : {couche}/{nom} ({df.count()} lignes)")
 
 
