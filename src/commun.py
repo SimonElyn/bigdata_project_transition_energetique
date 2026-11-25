@@ -97,7 +97,7 @@ def ecrire(df, couche: str, nom: str, csv: bool = False) -> None:
                 fichier_csv = RACINE / "data" / couche / f"{nom}.csv"
                 fichier_csv.parent.mkdir(parents=True, exist_ok=True)
                 df.toPandas().to_csv(fichier_csv, index=False, encoding="utf-8")
-    print(f"   -> écrit : {couche}/{nom} ({df.count()} lignes)")
+    print(f"   -> écrit : {couche}/{nom}")
 
 
 def lire(spark, couche: str, nom: str):
