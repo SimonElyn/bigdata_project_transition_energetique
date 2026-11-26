@@ -209,8 +209,11 @@ indice = (temperatures.join(sous_zones, "departement")
                   F.round("soleil_kwh_kwc", 0).alias("soleil_kwh_kwc")))
 par_zone = (final.withColumn("domaine", domaine)
             .groupBy("zone", "departement", "nom_departement", "domaine")
+            # avg ignores null return times, so expose how many solutions it averages.
             .agg(F.round(F.avg("retour_annees"), 1).alias("retour_moyen_annees"),
-                 F.count("*").alias("nb_resultats_moyennes"))
+                 F.count("*").alias("nb_solutions"),
+                 F.count("retour_annees").alias("nb_solutions_rentables"),
+                 (F.count("*") - F.count("retour_annees")).alias("nb_solutions_non_rentables"))
             .join(indice, "departement")
             .orderBy(F.desc("dju"), "domaine"))                    # du plus froid au plus doux
 ecrire(par_zone, "gold", "rentabilite_par_zone", csv=True)

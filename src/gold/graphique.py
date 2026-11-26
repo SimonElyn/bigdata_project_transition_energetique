@@ -279,7 +279,7 @@ def zones(par_zone: pd.DataFrame) -> Path:
                       padding=3, fontsize=10, fontweight="bold")
     bas.set_xticks(x0, [f"{r['nom_departement']}\nzone {r['sous_zone']}" for _, r in climat.iterrows()],
                    fontsize=12)
-    bas.set_ylabel("Années pour rembourser (moins = mieux)", fontsize=11)
+    bas.set_ylabel("Années moyennes (solutions rentables seulement)", fontsize=11)
     bas.set_ylim(0, par_zone["retour_moyen_annees"].max() * 1.15)
     bas.grid(axis="y", alpha=0.3)
     bas.spines[["top", "right"]].set_visible(False)
