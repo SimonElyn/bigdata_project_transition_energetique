@@ -28,6 +28,15 @@ Une seule formule pour toutes les solutions : **années de retour = investisseme
 
 Les données sont téléchargées par les scripts `src/bronze/` à chaque exécution ; le DPE est un tirage aléatoire, donc les chiffres varient légèrement d'une exécution à l'autre. Tailles mesurées le 27/11/2026.
 
+## Architecture (bronze, silver, gold)
+| Couche | Contenu | Scripts |
+|---|---|---|
+| bronze | données brutes, telles que téléchargées (CSV, JSON) | `src/bronze/*.py` |
+| silver | données nettoyées et typées + rapport qualité (Parquet) | `src/silver/nettoyage.py` |
+| gold | tableau de rentabilité, synthèse par zone, graphiques (Parquet, CSV, PNG) | `src/gold/rentabilite.py`, `src/gold/graphique.py` |
+
+Outils partagés (chemins, Spark, lecture/écriture) : `src/commun.py`. La variable `STORAGE` choisit le stockage : `local` (par défaut, dossier `data/`) ou `s3`.
+
 ## Chemins S3
 - Bucket : `s3://<id_onyxia>/energie/`
 - Données brutes : `energie/bronze/` (`dpe/`, `carburants/`, `pvgis/`) et hypothèses : `energie/bronze/hypotheses/`
@@ -36,13 +45,33 @@ Les données sont téléchargées par les scripts `src/bronze/` à chaque exécu
 
 ## Reproduction
 ```bash
-git clone <url_du_repo> && cd bigdata_project
+git clone https://github.com/SimonElyn/bigdata_project_transition_energetique.git
+cd bigdata_project_transition_energetique
 pip install -r requirements.txt
-export S3_BUCKET=<votre_id_onyxia>
-python src/check_s3.py            # 0. vérifie l'accès S3
-# 1. ingestion  : à compléter
-# 2. qualité    : à compléter
-# 3. pipeline   : à compléter
-# 4. vérification : à compléter
+
+# 1. Ingestion (bronze) : téléchargement des données brutes dans data/bronze/
+python src/bronze/dpe.py
+python src/bronze/carburants.py
+python src/bronze/pvgis.py
+python src/bronze/temperatures.py
+
+# 2. Qualité et nettoyage (silver)
+python src/silver/nettoyage.py
+
+# 3. Rentabilité et graphiques (gold) : data/gold/*.csv et data/gold/graphique_*.png
+python src/gold/rentabilite.py
+
+# 4. Vérification et mesures : evidence/
+python src/verification/verif_duckdb.py
+python src/verification/benchmark.py
 ```
-Relancer une étape : _à compléter_.
+
+**Sur Onyxia (S3)** : après l'étape 1, lancer `python src/bronze/envoi_s3.py` pour copier les données brutes et les hypothèses sur le bucket, puis les étapes 2 et 3 avec `STORAGE=s3` (par exemple `STORAGE=s3 python src/silver/nettoyage.py`). La vérification DuckDB relit les fichiers locaux de `data/` : la lancer en mode local.
+
+**Relancer une étape** : chaque script relit la couche précédente et réécrit la sienne (mode `overwrite`). On peut donc relancer une étape seule, par exemple `python src/gold/rentabilite.py` après avoir modifié une hypothèse. `python src/gold/graphique.py` redessine les graphiques sans Spark, à partir de `data/gold/rentabilite.csv`.
+
+## Résultats et preuves
+- `src/resultats.ipynb` : tableau des années de retour par solution et par département, classement, graphique.
+- `src/hypotheses/hypotheses_projet_transition_energetique.html` : synthèse lisible de toutes les hypothèses.
+- `evidence/verification_duckdb.txt` : le calcul de la pompe à chaleur refait en SQL avec DuckDB à partir des données brutes donne 12 résultats sur 12 identiques à Spark.
+- `evidence/benchmark.csv` et `benchmark.png` : temps de pandas, DuckDB et Spark sur le même calcul, de 22 000 à 1,1 million de lignes.
